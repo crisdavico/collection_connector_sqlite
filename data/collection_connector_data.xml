@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<odoo>
+    <data noupdate="1">
+        <record id="connector_sample_sellers" model="collection.connector">
+            <field name="name">SQLite Sellers</field>
+            <field name="type">sqlite</field>
+            <field name="company_id" ref="base.main_company" />
+        </record>
+    </data>
+    <function model="collection.connector" name="_ensure_sample_sqlite_source" />
+</odoo>
