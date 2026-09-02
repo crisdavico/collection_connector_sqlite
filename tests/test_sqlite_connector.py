@@ -207,7 +207,7 @@ class TestSqliteConnector(TransactionCase):
         self._assert_user_error_no_leak(connector.list_sellers, path)
         self._assert_user_error_no_leak(connector.test_connection, path)
 
-    def _write_sellers_db(self, rows):
+    def _write_sellers_db_without_commission(self, rows):
         folder = tempfile.mkdtemp(prefix="col_sqlite_")
         self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
         path = os.path.join(folder, "sellers.sqlite")
@@ -230,13 +230,51 @@ class TestSqliteConnector(TransactionCase):
         conn.close()
         return path
 
+    def test_missing_commission_percent_column_raises_user_error_no_path_sql(self):
+        """Missing commission_percent MUST UserError with no path or SQL."""
+        path = self._write_sellers_db_without_commission((("s1", "Ana", "549111", 1),))
+        with open(path, "rb") as handle:
+            before = handle.read()
+        connector = self._make_sqlite_connector(path, name="SQLite missing commission")
+        self._assert_user_error_no_leak(connector.list_sellers, path)
+        self._assert_user_error_no_leak(connector.test_connection, path)
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), before)
+
+    def _write_sellers_db(self, rows):
+        folder = tempfile.mkdtemp(prefix="col_sqlite_")
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        path = os.path.join(folder, "sellers.sqlite")
+        conn = sqlite3.connect(path)
+        conn.execute(
+            """
+            CREATE TABLE sellers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                mobile TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                commission_percent REAL NOT NULL DEFAULT 0
+                    CHECK (commission_percent >= 0 AND commission_percent <= 100)
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO sellers "
+            "(id, name, mobile, active, commission_percent) "
+            "VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+        return path
+
     def test_sqlite_success_list_and_connection_test_does_not_write(self):
         """3.13 Success lists active sellers, tests connection, and does not write."""
         path = self._write_sellers_db(
             (
-                ("s1", "Ana", "549111", 1),
-                ("s2", "Beto", "549112", 1),
-                ("s3", "Cora", None, 0),
+                ("s1", "Ana", "549111", 1, 0.0),
+                ("s2", "Beto", "549112", 1, 0.0),
+                ("s3", "Cora", None, 0, 0.0),
             )
         )
         with open(path, "rb") as handle:
@@ -459,6 +497,69 @@ class TestSqliteConnector(TransactionCase):
         )
         self._assert_connection_ok(connector)
 
+    def test_sample_sqlite_seller_commission_percent_rates(self):
+        """Sample sellers MUST report Ana 5.0 … Elena 3.0; Facundo omitted."""
+        connector = self.env.ref("collection_connector_sqlite.connector_sample_sellers")
+        connector._ensure_sample_sqlite_source()
+        conn = sqlite3.connect(connector.sqlite_path)
+        try:
+            seller_cols = {row[1] for row in conn.execute("PRAGMA table_info(sellers)")}
+            self.assertIn("commission_percent", seller_cols)
+            rates = dict(
+                conn.execute("SELECT id, commission_percent FROM sellers").fetchall()
+            )
+            names = dict(conn.execute("SELECT id, name FROM sellers").fetchall())
+            actives = dict(conn.execute("SELECT id, active FROM sellers").fetchall())
+        finally:
+            conn.close()
+        self.assertEqual(names["seller-001"], "Ana Pérez")
+        self.assertEqual(rates["seller-001"], 5.0)
+        self.assertEqual(names["seller-002"], "Bruno Gómez")
+        self.assertEqual(rates["seller-002"], 7.5)
+        self.assertEqual(names["seller-003"], "Carla Díaz")
+        self.assertEqual(rates["seller-003"], 10.0)
+        self.assertEqual(names["seller-004"], "Diego Fernández")
+        self.assertEqual(rates["seller-004"], 0.0)
+        self.assertEqual(names["seller-005"], "Elena Ruiz")
+        self.assertEqual(rates["seller-005"], 3.0)
+        self.assertEqual(names["seller-006"], "Facundo López")
+        self.assertEqual(rates["seller-006"], 5.0)
+        self.assertEqual(actives["seller-006"], 0)
+        fetched = {
+            row["id"]: row
+            for row in connector._sqlite_fetch_sellers(connector.sqlite_path)
+        }
+        self.assertEqual(fetched["seller-001"]["commission_percent"], 5.0)
+        self.assertEqual(fetched["seller-002"]["commission_percent"], 7.5)
+        self.assertEqual(fetched["seller-003"]["commission_percent"], 10.0)
+        self.assertEqual(fetched["seller-004"]["commission_percent"], 0.0)
+        self.assertEqual(fetched["seller-005"]["commission_percent"], 3.0)
+        self.assertEqual(fetched["seller-006"]["commission_percent"], 5.0)
+        result = connector.list_sellers()
+        listed_ids = [row["external_seller_id"] for row in result["sellers"]]
+        self.assertEqual(
+            listed_ids,
+            [
+                "seller-001",
+                "seller-002",
+                "seller-003",
+                "seller-004",
+                "seller-005",
+            ],
+        )
+        self.assertNotIn("seller-006", listed_ids)
+        listed_names = {row["name"] for row in result["sellers"]}
+        self.assertEqual(
+            listed_names,
+            {
+                "Ana Pérez",
+                "Bruno Gómez",
+                "Carla Díaz",
+                "Diego Fernández",
+                "Elena Ruiz",
+            },
+        )
+
     def test_rollback_vouchers_sheets_mcp_unchanged(self):
         """3.15 Vouchers, sheets, get_seller_id, and create MCP stay unchanged."""
         seller = create_internal_seller(self.env, "sqlite_rollback_seller")
@@ -510,7 +611,7 @@ class TestSqliteConnector(TransactionCase):
 
     def test_company_m2o_set_null_when_sqlite_connector_unlinked(self):
         """3.16 Unlinking a sqlite connector MUST set company M2O to null."""
-        path = self._write_sellers_db((("s1", "Ana", "549111", 1),))
+        path = self._write_sellers_db((("s1", "Ana", "549111", 1, 0.0),))
         connector = self._make_sqlite_connector(path, name="SQLite unlink")
         company = self.env.company
         company.collection_connector_id = connector
@@ -556,7 +657,9 @@ class TestSqliteConnector(TransactionCase):
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 mobile TEXT,
-                active INTEGER NOT NULL DEFAULT 1
+                active INTEGER NOT NULL DEFAULT 1,
+                commission_percent REAL NOT NULL DEFAULT 0
+                    CHECK (commission_percent >= 0 AND commission_percent <= 100)
             )
             """
         )
@@ -573,7 +676,9 @@ class TestSqliteConnector(TransactionCase):
             """
         )
         conn.executemany(
-            "INSERT INTO sellers (id, name, mobile, active) VALUES (?, ?, ?, ?)",
+            "INSERT INTO sellers "
+            "(id, name, mobile, active, commission_percent) "
+            "VALUES (?, ?, ?, ?, ?)",
             sellers,
         )
         conn.executemany(
@@ -604,8 +709,8 @@ class TestSqliteConnector(TransactionCase):
         """Seller-scoped read MUST return that seller's active customers only."""
         path = self._write_source_db(
             (
-                ("s1", "Ana", "549111", 1),
-                ("s2", "Beto", "549112", 1),
+                ("s1", "Ana", "549111", 1, 0.0),
+                ("s2", "Beto", "549112", 1, 0.0),
             ),
             (
                 ("c1", "s1", "Active One", "20-1", "C-1", 1),
@@ -639,7 +744,7 @@ class TestSqliteConnector(TransactionCase):
 
     def test_sqlite_list_customers_malformed_schema_raises_user_error(self):
         """Invalid customers schema MUST UserError; sellers listing still works."""
-        path = self._write_sellers_db((("s1", "Ana", "549111", 1),))
+        path = self._write_sellers_db((("s1", "Ana", "549111", 1, 0.0),))
         connector = self._make_sqlite_connector(path, name="SQLite no customers")
         seller = self._enabled_bound_seller(connector, "s1", "sqlite_cust_schema")
         self._assert_user_error_no_leak(
@@ -662,16 +767,18 @@ class TestSqliteConnector(TransactionCase):
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 mobile TEXT,
-                active INTEGER NOT NULL DEFAULT 1
+                active INTEGER NOT NULL DEFAULT 1,
+                commission_percent REAL NOT NULL DEFAULT 0
+                    CHECK (commission_percent >= 0 AND commission_percent <= 100)
             )
             """
         )
         conn.execute(
             """
-            INSERT INTO sellers (id, name, mobile, active)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO sellers (id, name, mobile, active, commission_percent)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            ("s1", "Ana", "549111", 1),
+            ("s1", "Ana", "549111", 1, 0.0),
         )
         conn.execute("CREATE TABLE customers (id TEXT PRIMARY KEY, name TEXT)")
         conn.commit()
@@ -717,7 +824,9 @@ class TestSqliteConnector(TransactionCase):
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 mobile TEXT,
-                active INTEGER NOT NULL DEFAULT 1
+                active INTEGER NOT NULL DEFAULT 1,
+                commission_percent REAL NOT NULL DEFAULT 0
+                    CHECK (commission_percent >= 0 AND commission_percent <= 100)
             )
             """
         )
@@ -748,7 +857,9 @@ class TestSqliteConnector(TransactionCase):
             """
         )
         conn.executemany(
-            "INSERT INTO sellers (id, name, mobile, active) VALUES (?, ?, ?, ?)",
+            "INSERT INTO sellers "
+            "(id, name, mobile, active, commission_percent) "
+            "VALUES (?, ?, ?, ?, ?)",
             sellers,
         )
         conn.executemany(
@@ -774,7 +885,7 @@ class TestSqliteConnector(TransactionCase):
     def test_sqlite_get_customer_debt_outstanding_only_and_does_not_write(self):
         """Seller-scoped debt MUST return outstanding invoices and not write."""
         path = self._write_debt_db(
-            (("s1", "Ana", "549111", 1), ("s2", "Beto", "549112", 1)),
+            (("s1", "Ana", "549111", 1, 0.0), ("s2", "Beto", "549112", 1, 0.0)),
             (
                 ("c1", "s1", "Active One", "20-1", "C-1", 1),
                 ("c2", "s1", "Inactive One", "20-2", "C-2", 0),
@@ -831,7 +942,7 @@ class TestSqliteConnector(TransactionCase):
     def test_sqlite_get_customer_debt_zero_debt_succeeds(self):
         """Active customer with no outstanding invoices MUST return zeros."""
         path = self._write_debt_db(
-            (("s1", "Ana", "549111", 1),),
+            (("s1", "Ana", "549111", 1, 0.0),),
             (("c1", "s1", "Zero Debt", "20-1", "C-1", 1),),
             (("i1", "c1", "A-1", "2026-01-01", "2026-02-01", 20.0, 0.0, "paid"),),
         )
@@ -848,7 +959,7 @@ class TestSqliteConnector(TransactionCase):
             self.assertEqual(handle.read(), before)
 
         empty_path = self._write_debt_db(
-            (("s1", "Ana", "549111", 1),),
+            (("s1", "Ana", "549111", 1, 0.0),),
             (("c2", "s1", "No Invoices", "20-2", "C-2", 1),),
             (),
         )
@@ -866,7 +977,7 @@ class TestSqliteConnector(TransactionCase):
     def test_sqlite_get_customer_debt_rejects_inactive_and_other_seller(self):
         """Inactive and other-seller identifications MUST fail closed."""
         path = self._write_debt_db(
-            (("s1", "Ana", "549111", 1), ("s2", "Beto", "549112", 1)),
+            (("s1", "Ana", "549111", 1, 0.0), ("s2", "Beto", "549112", 1, 0.0)),
             (
                 ("c1", "s1", "Active One", "20-1", "C-1", 1),
                 ("c2", "s1", "Inactive One", "20-2", "C-2", 0),
@@ -891,7 +1002,7 @@ class TestSqliteConnector(TransactionCase):
     def test_sqlite_get_customer_debt_malformed_schema_raises_user_error(self):
         """Invalid invoices schema MUST UserError; sellers/customers still work."""
         path = self._write_source_db(
-            (("s1", "Ana", "549111", 1),),
+            (("s1", "Ana", "549111", 1, 0.0),),
             (("c1", "s1", "Active One", "20-1", "C-1", 1),),
         )
         connector = self._make_sqlite_connector(path, name="SQLite no invoices")
@@ -916,7 +1027,9 @@ class TestSqliteConnector(TransactionCase):
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 mobile TEXT,
-                active INTEGER NOT NULL DEFAULT 1
+                active INTEGER NOT NULL DEFAULT 1,
+                commission_percent REAL NOT NULL DEFAULT 0
+                    CHECK (commission_percent >= 0 AND commission_percent <= 100)
             )
             """
         )
@@ -934,10 +1047,10 @@ class TestSqliteConnector(TransactionCase):
         )
         conn.execute(
             """
-            INSERT INTO sellers (id, name, mobile, active)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO sellers (id, name, mobile, active, commission_percent)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            ("s1", "Ana", "549111", 1),
+            ("s1", "Ana", "549111", 1, 0.0),
         )
         conn.execute(
             """

@@ -12,7 +12,9 @@ CREATE TABLE IF NOT EXISTS sellers (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     mobile TEXT,
-    active INTEGER NOT NULL DEFAULT 1
+    active INTEGER NOT NULL DEFAULT 1,
+    commission_percent REAL NOT NULL DEFAULT 0
+        CHECK (commission_percent >= 0 AND commission_percent <= 100)
 );
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -38,13 +40,13 @@ CREATE TABLE IF NOT EXISTS invoices (
 CREATE INDEX IF NOT EXISTS idx_customers_seller_id ON customers(seller_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_customer_id ON invoices(customer_id);
 
-INSERT INTO sellers (id, name, mobile, active) VALUES
-    ('seller-001', 'Ana Pérez', '5491155510001', 1),
-    ('seller-002', 'Bruno Gómez', '5491155510002', 1),
-    ('seller-003', 'Carla Díaz', '5491155510003', 1),
-    ('seller-004', 'Diego Fernández', '5491155510004', 1),
-    ('seller-005', 'Elena Ruiz', '5491166677788', 1),
-    ('seller-006', 'Facundo López', NULL, 0);
+INSERT INTO sellers (id, name, mobile, active, commission_percent) VALUES
+    ('seller-001', 'Ana Pérez', '5491155510001', 1, 5.0),
+    ('seller-002', 'Bruno Gómez', '5491155510002', 1, 7.5),
+    ('seller-003', 'Carla Díaz', '5491155510003', 1, 10.0),
+    ('seller-004', 'Diego Fernández', '5491155510004', 1, 0.0),
+    ('seller-005', 'Elena Ruiz', '5491166677788', 1, 3.0),
+    ('seller-006', 'Facundo López', NULL, 0, 5.0);
 
 -- ---------------------------------------------------------------------------
 -- seller-001 Ana Pérez (6 customers). CUIT mix 20-/30-. Apostrophe + Ñ names.

@@ -2,7 +2,7 @@ Read-only SQLite seller, customer, and invoice source for Collections.
 
 Adds connector type `sqlite` with an absolute `sqlite_path`. After rejecting relative
 paths and `?` `#` NUL, the addon opens `file:<path>?mode=ro` against
-`sellers(id TEXT PRIMARY KEY, name TEXT NOT NULL, mobile TEXT, active INTEGER NOT NULL DEFAULT 1)`,
+`sellers(id TEXT PRIMARY KEY, name TEXT NOT NULL, mobile TEXT, active INTEGER NOT NULL DEFAULT 1, commission_percent REAL NOT NULL DEFAULT 0 CHECK 0–100)`,
 `customers(id TEXT PRIMARY KEY, seller_id TEXT NOT NULL, name TEXT NOT NULL, identification TEXT NOT NULL UNIQUE, customer_code TEXT NOT NULL UNIQUE, active INTEGER NOT NULL DEFAULT 1)`,
 and
 `invoices(id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, number TEXT NOT NULL UNIQUE, issue_date TEXT NOT NULL, due_date TEXT NOT NULL, amount REAL NOT NULL, balance REAL NOT NULL, state TEXT NOT NULL)`.

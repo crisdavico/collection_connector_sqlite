@@ -12,7 +12,9 @@ from odoo.tools.translate import _
 from ..hooks import ensure_sample_sqlite_source
 
 _SQLITE_PATH_REJECT_CHARS = ("?", "#", "\x00")
-_SQLITE_REQUIRED_COLUMNS = frozenset({"id", "name", "mobile", "active"})
+_SQLITE_REQUIRED_COLUMNS = frozenset(
+    {"id", "name", "mobile", "active", "commission_percent"}
+)
 _SQLITE_CUSTOMER_COLUMNS = frozenset(
     {"id", "seller_id", "name", "identification", "customer_code", "active"}
 )
@@ -115,7 +117,7 @@ class CollectionConnectorSqlite(models.Model):
             self._sqlite_assert_schema(conn)
             try:
                 rows = conn.execute(
-                    "SELECT id, name, mobile, active FROM sellers"
+                    "SELECT id, name, mobile, active, commission_percent FROM sellers"
                 ).fetchall()
             except sqlite3.Error:
                 self._sqlite_misconfigured()
@@ -127,6 +129,7 @@ class CollectionConnectorSqlite(models.Model):
                 "name": row[1],
                 "mobile": row[2],
                 "active": row[3],
+                "commission_percent": row[4],
             }
             for row in rows
         ]
