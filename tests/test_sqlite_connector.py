@@ -16,6 +16,7 @@ from odoo.tests import TransactionCase
 
 from odoo.addons.collection.tests.test_collection_payment import (
     create_internal_seller,
+    dummy_customer_partner,
     ensure_enabled_seller,
 )
 
@@ -561,14 +562,17 @@ class TestSqliteConnector(TransactionCase):
         )
 
     def test_rollback_vouchers_sheets_mcp_unchanged(self):
-        """3.15 Vouchers, sheets, get_seller_id, and create MCP stay unchanged."""
+        """3.15 Vouchers, sheets, and get_seller_id stay; voucher create MCP is gone."""
         seller = create_internal_seller(self.env, "sqlite_rollback_seller")
         ensure_enabled_seller(self.env, seller)
         seller.partner_id.phone = "+54 9 11 5555-9999"
+        partner = dummy_customer_partner(
+            self.env, extra={"customer_identification": "SQLITE-RB-CUST"}
+        )
         voucher = self.env["collection.voucher"].create(
             {
                 "seller_id": seller.id,
-                "customer_identification": "SQLITE-RB-CUST",
+                "partner_id": partner.id,
                 "document_type": "bank_transfer",
                 "amount": 10.0,
                 "document_id": "SQLITE-ROLLBACK-DOC",
@@ -576,7 +580,7 @@ class TestSqliteConnector(TransactionCase):
         )
         self.assertTrue(voucher.id)
         self.assertTrue(voucher.name)
-        self.assertEqual(voucher.state, "pending")
+        self.assertEqual(voucher.state, "draft")
         self.assertTrue(voucher.sheet_id)
         sheet_id = voucher.sheet_id.id
         tool_model = self.env["muk_mcp.tool"]
@@ -587,26 +591,10 @@ class TestSqliteConnector(TransactionCase):
         )
         lookup = json.loads(lookup_text)
         self.assertEqual(lookup["seller_id"], seller.id)
-        create_text, _create_info = tool_model._call(
-            "create_collection_vouchers",
-            {
-                "customer_identification": "SQLITE-RB",
-                "seller_id": seller.id,
-                "payments": [
-                    {
-                        "document_id": "SQLITE-RB-DOC-2",
-                        "document_type": "bank_transfer",
-                        "amount": 25.0,
-                        "from_account": "FROM-RB",
-                        "to_account": "TO-RB",
-                    }
-                ],
-            },
-            self.env,
-        )
-        created = json.loads(create_text)
-        self.assertEqual(created["vouchers"][0]["document_id"], "SQLITE-RB-DOC-2")
-        self.assertEqual(created["vouchers"][0]["state"], "pending")
+        by_name = {
+            entry["name"]: entry for entry in tool_model.get_tools(registry="mcp")
+        }
+        self.assertNotIn("create_collection_vouchers", by_name)
         self.assertEqual(voucher.sheet_id.id, sheet_id)
 
     def test_company_m2o_set_null_when_sqlite_connector_unlinked(self):
