@@ -381,6 +381,7 @@ class TestSqliteConnector(TransactionCase):
                     "amount",
                     "balance",
                     "state",
+                    "document_kind",
                 }.issubset(invoice_cols)
             )
             customer_fks = conn.execute("PRAGMA foreign_key_list(customers)").fetchall()
@@ -467,6 +468,13 @@ class TestSqliteConnector(TransactionCase):
                 "SELECT id FROM invoices WHERE amount >= 1000000"
             ).fetchall()
             self.assertTrue(huge)
+            quotations = conn.execute(
+                """
+                SELECT id FROM invoices
+                WHERE document_kind = 'quotation' AND balance > 0
+                """
+            ).fetchall()
+            self.assertTrue(quotations)
             accented = conn.execute(
                 """
                 SELECT id FROM customers
@@ -783,8 +791,9 @@ class TestSqliteConnector(TransactionCase):
         self._assert_connection_ok(bad_connector)
 
     def test_sample_sqlite_list_customers_for_imported_seller(self):
-        """Sample DB MUST list seller-001's five active customers after Import."""
+        """Sample DB MUST list Ana's original and voucher-matched customers."""
         connector = self.env.ref("collection_connector_sqlite.connector_sample_sellers")
+        connector._ensure_sample_sqlite_source()
         company = self.env.company
         company.collection_connector_id = connector
         company._sync_enabled_sellers_from_connector()
@@ -796,7 +805,24 @@ class TestSqliteConnector(TransactionCase):
         ids = [row["external_customer_id"] for row in result["customers"]]
         self.assertEqual(
             ids,
-            ["cust-001", "cust-002", "cust-003", "cust-004", "cust-005"],
+            [
+                "cust-001",
+                "cust-002",
+                "cust-003",
+                "cust-004",
+                "cust-005",
+                "cust-035",
+                "cust-036",
+                "cust-037",
+                "cust-038",
+                "cust-039",
+                "cust-040",
+                "cust-041",
+                "cust-042",
+                "cust-043",
+                "cust-044",
+                "cust-045",
+            ],
         )
         self.assertNotIn("cust-006", ids)
         self.assertNotIn("cust-007", ids)
@@ -840,7 +866,9 @@ class TestSqliteConnector(TransactionCase):
                 due_date TEXT NOT NULL,
                 amount REAL NOT NULL,
                 balance REAL NOT NULL,
-                state TEXT NOT NULL
+                state TEXT NOT NULL,
+                document_kind TEXT NOT NULL DEFAULT 'invoice'
+                    CHECK (document_kind IN ('invoice', 'quotation'))
             )
             """
         )
@@ -916,6 +944,8 @@ class TestSqliteConnector(TransactionCase):
         self.assertEqual(result["summary"]["overdue_balance"], 100.0)
         self.assertEqual(result["summary"]["open_balance"], 50.0)
         self.assertEqual(result["summary"]["invoice_count"], 2)
+        self.assertEqual(result["invoices"][0]["document_kind"], "invoice")
+        self.assertEqual(result["invoices"][1]["document_kind"], "invoice")
         self.assertEqual(result["source"]["connector_type"], "sqlite")
         self.assertEqual(result["source"]["connector_id"], connector.id)
         with open(path, "rb") as handle:
@@ -1070,6 +1100,7 @@ class TestSqliteConnector(TransactionCase):
     def test_sample_sqlite_get_customer_debt_for_imported_seller(self):
         """Sample DB MUST return cust-001 outstanding invoices after Import."""
         connector = self.env.ref("collection_connector_sqlite.connector_sample_sellers")
+        connector._ensure_sample_sqlite_source()
         company = self.env.company
         company.collection_connector_id = connector
         company._sync_enabled_sellers_from_connector()
@@ -1109,3 +1140,76 @@ class TestSqliteConnector(TransactionCase):
         )
         with open(connector.sqlite_path, "rb") as handle:
             self.assertEqual(handle.read(), before)
+
+    def test_sqlite_get_customer_debt_returns_quotation_kind(self):
+        """Outstanding quotation MUST keep document_kind quotation."""
+        path = self._write_debt_db(
+            (("s1", "Ana", "549111", 1, 0.0),),
+            (("c1", "s1", "Mixed Debt", "20-1", "C-1", 1),),
+            (),
+        )
+        conn = sqlite3.connect(path)
+        conn.execute(
+            """
+            INSERT INTO invoices (
+                id, customer_id, number, issue_date, due_date,
+                amount, balance, state, document_kind
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "q1",
+                "c1",
+                "PRE-1",
+                "2026-01-10",
+                "2026-03-10",
+                75.0,
+                75.0,
+                "overdue",
+                "quotation",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO invoices (
+                id, customer_id, number, issue_date, due_date, amount, balance, state
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("i1", "c1", "A-1", "2026-04-01", "2026-09-01", 50.0, 50.0, "open"),
+        )
+        conn.commit()
+        conn.close()
+        connector = self._make_sqlite_connector(path, name="SQLite quotation")
+        seller = self._enabled_bound_seller(connector, "s1", "sqlite_debt_quotation")
+        result = connector.get_customer_debt(seller.id, "20-1")
+        kinds = {
+            row["external_invoice_id"]: row["document_kind"]
+            for row in result["invoices"]
+        }
+        self.assertEqual(kinds["q1"], "quotation")
+        self.assertEqual(kinds["i1"], "invoice")
+        self.assertEqual(result["summary"]["total_balance"], 125.0)
+        self.assertEqual(result["summary"]["invoice_count"], 2)
+
+    def test_sample_sqlite_get_customer_debt_voucher_quotation(self):
+        """Voucher-matched customer MUST expose mixed invoice and quotation kinds."""
+        connector = self.env.ref("collection_connector_sqlite.connector_sample_sellers")
+        connector._ensure_sample_sqlite_source()
+        company = self.env.company
+        company.collection_connector_id = connector
+        company._sync_enabled_sellers_from_connector()
+        binding = connector.seller_binding_ids.filtered(
+            lambda rec: rec.external_seller_id == "seller-001"
+        )
+        self.assertEqual(len(binding), 1)
+        result = connector.get_customer_debt(binding.user_id.id, "20-29733232-6")
+        self.assertEqual(result["customer"]["external_customer_id"], "cust-035")
+        self.assertEqual(result["customer"]["name"], "José Montenegro")
+        kinds = {
+            row["external_invoice_id"]: row["document_kind"]
+            for row in result["invoices"]
+        }
+        self.assertEqual(kinds["inv-073"], "invoice")
+        self.assertEqual(kinds["inv-074"], "invoice")
+        self.assertEqual(kinds["quo-001"], "quotation")
+        self.assertAlmostEqual(result["summary"]["total_balance"], 1674316.48)
+        self.assertEqual(result["summary"]["invoice_count"], 3)

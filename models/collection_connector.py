@@ -28,8 +28,10 @@ _SQLITE_INVOICE_COLUMNS = frozenset(
         "amount",
         "balance",
         "state",
+        "document_kind",
     }
 )
+_SQLITE_DOCUMENT_KINDS = frozenset({"invoice", "quotation"})
 
 
 def sqlite_path_is_rejected(path):
@@ -213,7 +215,8 @@ class CollectionConnectorSqlite(models.Model):
             try:
                 invoice_rows = conn.execute(
                     """
-                    SELECT id, number, issue_date, due_date, amount, balance, state
+                    SELECT id, number, issue_date, due_date, amount, balance,
+                           state, document_kind
                       FROM invoices
                      WHERE customer_id = ?
                      ORDER BY due_date, number, id
@@ -238,9 +241,12 @@ class CollectionConnectorSqlite(models.Model):
                     "number": row[1],
                     "issue_date": row[2],
                     "due_date": row[3],
-                    "amount": row[4],
-                    "balance": row[5],
+                    "amount": round(float(row[4]), 2),
+                    "balance": round(float(row[5]), 2),
                     "state": row[6],
+                    "document_kind": (
+                        row[7] if row[7] in _SQLITE_DOCUMENT_KINDS else "invoice"
+                    ),
                 }
                 for row in invoice_rows
             ],

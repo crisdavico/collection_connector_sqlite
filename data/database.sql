@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS invoices (
     due_date TEXT NOT NULL,
     amount REAL NOT NULL CHECK (amount > 0),
     balance REAL NOT NULL CHECK (balance >= 0 AND balance <= amount),
-    state TEXT NOT NULL CHECK (state IN ('open', 'paid', 'overdue'))
+    state TEXT NOT NULL CHECK (state IN ('open', 'paid', 'overdue')),
+    document_kind TEXT NOT NULL DEFAULT 'invoice'
+        CHECK (document_kind IN ('invoice', 'quotation'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_customers_seller_id ON customers(seller_id);
@@ -49,7 +51,8 @@ INSERT INTO sellers (id, name, mobile, active, commission_percent) VALUES
     ('seller-006', 'Facundo López', NULL, 0, 5.0);
 
 -- ---------------------------------------------------------------------------
--- seller-001 Ana Pérez (6 customers). CUIT mix 20-/30-. Apostrophe + Ñ names.
+-- seller-001 Ana Pérez (6 original + 11 voucher-matched customers).
+-- CUIT mix 20-/30-/23-/27-. Apostrophe + Ñ names.
 -- ---------------------------------------------------------------------------
 
 -- mix portfolio: open / paid / overdue; apostrophe name
@@ -313,3 +316,185 @@ INSERT INTO customers (id, seller_id, name, identification, customer_code, activ
 INSERT INTO invoices (id, customer_id, number, issue_date, due_date, amount, balance, state) VALUES
     ('inv-071', 'cust-034', 'A-0001-00005010', '2026-06-01', '2026-09-01', 45000.0, 45000.0, 'open'),
     ('inv-072', 'cust-034', 'A-0001-00005011', '2026-01-12', '2026-03-12', 28000.0, 28000.0, 'overdue');
+
+-- ---------------------------------------------------------------------------
+-- seller-001 Ana Pérez — voucher-matched customers for nebula-agent smoke.
+-- Outstanding invoice + quotation balances sum to each proof in
+-- nebula-agent/data/images-pdfs (today fixture 2026-08-26).
+-- Non-cash OCR proofs auto-apply only to invoices; quotations need cash or
+-- a manual application. Skip Depositos Santander*.jpeg (three tickets / OCR
+-- excluded) and the two PDF report exports.
+-- ---------------------------------------------------------------------------
+
+-- Transferencia MP.jpeg — bank_transfer 1,674,316.48 (2026-02-06)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-035', 'seller-001', 'José Montenegro', '20-29733232-6', 'C-1035', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'inv-073', 'cust-035', 'A-0001-00001012',
+        '2026-02-06', '2026-05-06', 1000000.0, 1000000.0, 'overdue', 'invoice'
+    ),
+    (
+        'inv-074', 'cust-035', 'A-0001-00001013',
+        '2026-02-06', '2026-10-06', 400000.0, 400000.0, 'open', 'invoice'
+    ),
+    (
+        'quo-001', 'cust-035', 'PRE-0001-00001001',
+        '2026-02-06', '2026-09-20', 274316.48, 274316.48, 'open', 'quotation'
+    );
+
+-- Comprobante Galicia.jpeg — bank_transfer 58,700.07 (2025-12-22)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-036', 'seller-001', 'Lilian Davico', '23-16912449-3', 'C-1036', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'inv-075', 'cust-036', 'A-0001-00001014',
+        '2025-12-22', '2026-09-22', 40000.0, 40000.0, 'open', 'invoice'
+    ),
+    (
+        'quo-002', 'cust-036', 'PRE-0001-00001002',
+        '2025-12-22', '2026-06-22', 18700.07, 18700.07, 'overdue', 'quotation'
+    );
+
+-- Comprobante santander.jpeg — bank_transfer 500,000 (2026-01-09)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-037', 'seller-001', 'Taller San Martín S.R.L.', '30-71241122-8', 'C-1037', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'inv-076', 'cust-037', 'A-0001-00001015',
+        '2026-01-09', '2026-04-09', 350000.0, 350000.0, 'overdue', 'invoice'
+    ),
+    (
+        'quo-003', 'cust-037', 'PRE-0001-00001003',
+        '2026-01-09', '2026-10-09', 150000.0, 150000.0, 'open', 'quotation'
+    );
+
+-- Comprobante bna.jpeg — bank_transfer 32,985 (2026-01-11)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-038', 'seller-001', 'Luciana Morelli', '27-39270511-8', 'C-1038', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'inv-077', 'cust-038', 'A-0001-00001016',
+        '2026-01-11', '2026-03-11', 20000.0, 20000.0, 'overdue', 'invoice'
+    ),
+    (
+        'quo-004', 'cust-038', 'PRE-0001-00001004',
+        '2026-01-11', '2026-09-11', 12985.0, 12985.0, 'open', 'quotation'
+    );
+
+-- Cheque Fisico.jpeg — check 167,677.70 (pay 2026-09-04)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-039', 'seller-001', 'Industrias Kras S.R.L.', '30-70115202-2', 'C-1039', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'inv-078', 'cust-039', 'A-0001-00001017',
+        '2026-04-04', '2026-06-04', 100000.0, 100000.0, 'overdue', 'invoice'
+    ),
+    (
+        'quo-005', 'cust-039', 'PRE-0001-00001005',
+        '2026-07-23', '2026-09-04', 67677.70, 67677.70, 'open', 'quotation'
+    );
+
+-- Echeq Galicia.jpeg — echeck 623,755 (pay 2026-03-06)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-040', 'seller-001', 'Repuestos del Norte S.A.', '30-71242233-9', 'C-1040', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'inv-079', 'cust-040', 'A-0001-00001018',
+        '2026-02-06', '2026-05-06', 400000.0, 400000.0, 'overdue', 'invoice'
+    ),
+    (
+        'quo-006', 'cust-040', 'PRE-0001-00001006',
+        '2026-02-06', '2026-09-06', 223755.0, 223755.0, 'open', 'quotation'
+    );
+
+-- Echeq Galicia 2.jpeg — echeck 570,120.49 (pay 2026-03-07)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-041', 'seller-001', 'Química del Sur S.A.', '30-71243344-0', 'C-1041', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'inv-080', 'cust-041', 'A-0001-00001019',
+        '2026-02-04', '2026-04-07', 300000.0, 300000.0, 'overdue', 'invoice'
+    ),
+    (
+        'quo-007', 'cust-041', 'PRE-0001-00001007',
+        '2026-02-04', '2026-09-07', 270120.49, 270120.49, 'open', 'quotation'
+    );
+
+-- Echeq BBVA.jpeg — echeck 1,314,384.11 (pay 2026-02-20)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-042', 'seller-001', 'Casa Sandin S.R.L.', '30-68472797-0', 'C-1042', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'inv-081', 'cust-042', 'A-0001-00001020',
+        '2026-02-04', '2026-05-20', 800000.0, 800000.0, 'overdue', 'invoice'
+    ),
+    (
+        'inv-082', 'cust-042', 'A-0001-00001021',
+        '2026-02-04', '2026-10-20', 300000.0, 300000.0, 'open', 'invoice'
+    ),
+    (
+        'quo-008', 'cust-042', 'PRE-0001-00001008',
+        '2026-02-04', '2026-09-20', 214384.11, 214384.11, 'open', 'quotation'
+    );
+
+-- Echeq Santander.jpeg — echeck 557,869.31 (pay 2026-02-21)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-043', 'seller-001', 'Alimentos Paraná S.R.L.', '30-71244455-1', 'C-1043', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'inv-083', 'cust-043', 'A-0001-00001022',
+        '2026-02-05', '2026-02-21', 400000.0, 400000.0, 'overdue', 'invoice'
+    ),
+    (
+        'quo-009', 'cust-043', 'PRE-0001-00001009',
+        '2026-02-05', '2026-03-21', 157869.31, 157869.31, 'overdue', 'quotation'
+    );
+
+-- Echeq Banco Provincia.jpeg — echeck 375,772.36 (pay 2026-03-06)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-044', 'seller-001', 'Maderas del Este S.A.', '30-71245566-2', 'C-1044', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'quo-010', 'cust-044', 'PRE-0001-00001010',
+        '2026-02-05', '2026-03-06', 200000.0, 200000.0, 'overdue', 'quotation'
+    ),
+    (
+        'inv-084', 'cust-044', 'A-0001-00001023',
+        '2026-02-05', '2026-09-06', 175772.36, 175772.36, 'open', 'invoice'
+    );
+
+-- Deposito Efectivo.jpeg — cash_deposit 403,500 (2026-02-05)
+INSERT INTO customers (id, seller_id, name, identification, customer_code, active) VALUES
+    ('cust-045', 'seller-001', 'Servicios Eléctricos Colón', '30-65986378-9', 'C-1045', 1);
+INSERT INTO invoices (
+    id, customer_id, number, issue_date, due_date, amount, balance, state, document_kind
+) VALUES
+    (
+        'inv-085', 'cust-045', 'A-0001-00001024',
+        '2026-02-05', '2026-04-05', 250000.0, 250000.0, 'overdue', 'invoice'
+    ),
+    (
+        'quo-011', 'cust-045', 'PRE-0001-00001011',
+        '2026-02-05', '2026-09-05', 153500.0, 153500.0, 'open', 'quotation'
+    );
