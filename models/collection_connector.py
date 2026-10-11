@@ -12,6 +12,7 @@ from odoo.tools.translate import _
 from ..hooks import ensure_sample_sqlite_source
 
 _SQLITE_PATH_REJECT_CHARS = ("?", "#", "\x00")
+_SQLITE_HEADER = b"SQLite format 3\x00"
 _SQLITE_REQUIRED_COLUMNS = frozenset(
     {"id", "name", "mobile", "active", "commission_percent"}
 )
@@ -43,6 +44,17 @@ def sqlite_path_is_rejected(path):
     return any(char in path for char in _SQLITE_PATH_REJECT_CHARS)
 
 
+def sqlite_file_has_header(path):
+    """Return True when ``path`` is a regular file starting with the SQLite header."""
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(len(_SQLITE_HEADER)) == _SQLITE_HEADER
+    except OSError:
+        return False
+
+
 class CollectionConnectorSqlite(models.Model):
     _inherit = "collection.connector"
 
@@ -50,12 +62,16 @@ class CollectionConnectorSqlite(models.Model):
         selection_add=[("sqlite", "SQLite")],
         ondelete={"sqlite": "cascade"},
     )
-    sqlite_path = fields.Char(string="SQLite Path")
-    sqlite_filename = fields.Char(compute="_compute_sqlite_file")
+    sqlite_path = fields.Char(string="SQLite Path", groups="base.group_system")
+    sqlite_filename = fields.Char(
+        compute="_compute_sqlite_file",
+        groups="base.group_system",
+    )
     sqlite_file = fields.Binary(
         string="SQLite File",
         compute="_compute_sqlite_file",
         attachment=False,
+        groups="base.group_system",
     )
 
     @api.model
@@ -70,9 +86,7 @@ class CollectionConnectorSqlite(models.Model):
             if rec.type != "sqlite":
                 continue
             path = rec.sqlite_path or ""
-            if sqlite_path_is_rejected(path):
-                continue
-            if not os.path.isfile(path) or not os.access(path, os.R_OK):
+            if sqlite_path_is_rejected(path) or not sqlite_file_has_header(path):
                 continue
             try:
                 with open(path, "rb") as handle:
@@ -88,14 +102,16 @@ class CollectionConnectorSqlite(models.Model):
     @api.private
     def _sqlite_safe_path(self):
         self.ensure_one()
-        path = self.sqlite_path or ""
+        # Admin-only config read with sudo so sellers and managers can query the
+        # source: the path is validated and opened read-only, never returned.
+        path = self.sudo().sqlite_path or ""
         if sqlite_path_is_rejected(path):
             self._sqlite_misconfigured()
         return path
 
     @api.private
     def _sqlite_connect(self, path):
-        if not os.path.isfile(path) or not os.access(path, os.R_OK):
+        if not sqlite_file_has_header(path):
             self._sqlite_misconfigured()
         try:
             return sqlite3.connect("file:%s?mode=ro" % path, uri=True)  # noqa: UP031
