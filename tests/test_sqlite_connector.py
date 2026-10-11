@@ -16,6 +16,7 @@ from odoo.modules.module import load_manifest
 from odoo.tests import TransactionCase
 
 from odoo.addons.collection.tests.test_collection_payment import (
+    create_collection_user,
     create_internal_seller,
     dummy_customer_partner,
     ensure_enabled_seller,
@@ -1253,15 +1254,21 @@ class TestSqliteConnector(TransactionCase):
         self.assertEqual(connector.sqlite_path, other_path)
 
     def test_non_admin_operations_still_reach_the_restricted_path(self):
-        """Sellers and managers MUST still query the source without reading its path."""
+        """MCP callers and managers MUST still query the source without its path.
+
+        Sellers act only through the agent: the MCP API user (a Collections
+        User) queries on the seller's behalf, and the seller identity itself
+        has no access to the connector.
+        """
         path = self._write_source_db(
             (("s1", "Ana", "549111", 1, 0.0),),
             (("c1", "s1", "Active One", "20-1", "C-1", 1),),
         )
         connector = self._make_sqlite_connector(path, name="SQLite non-admin")
         seller = self._enabled_bound_seller(connector, "s1", "sqlite_nonadmin_seller")
+        mcp_user = create_collection_user(self.env, "sqlite_nonadmin_mcp")
         manager = self._make_collection_manager("sqlite_nonadmin_manager")
-        customers = connector.with_user(seller).list_customers(seller.id)
+        customers = connector.with_user(mcp_user).list_customers(seller.id)
         self.assertEqual(
             [row["external_customer_id"] for row in customers["customers"]],
             ["c1"],
@@ -1271,6 +1278,37 @@ class TestSqliteConnector(TransactionCase):
             [row["external_seller_id"] for row in sellers["sellers"]],
             ["s1"],
         )
+        with self.assertRaises(AccessError):
+            connector.with_user(seller).list_customers(seller.id)
+
+    def test_settings_wizard_keeps_the_path_admin_only(self):
+        """A manager's connector settings never show or change the SQLite path."""
+        path = self._write_sellers_db((("s1", "Ana", "549111", 1, 0.0),))
+        other_path = self._write_sellers_db((("s2", "Beto", "549112", 1, 0.0),))
+        connector = self._make_sqlite_connector(path, name="SQLite wizard")
+        manager = self._make_collection_manager("sqlite_wizard_manager")
+        Wizard = (
+            self.env["collection.connector.settings"]
+            .with_user(manager)
+            .with_context(default_connector_id=connector.id)
+        )
+        defaults = Wizard.default_get(list(Wizard._fields))
+        self.assertNotIn("sqlite_path", defaults)
+        with self.assertRaises(AccessError):
+            Wizard.create({"connector_id": connector.id, "sqlite_path": other_path})
+        Wizard.create(defaults).action_save()
+        self.assertEqual(connector.sqlite_path, path)
+        admin = self.env.ref("base.user_admin")
+        AdminWizard = (
+            self.env["collection.connector.settings"]
+            .with_user(admin)
+            .with_context(default_connector_id=connector.id)
+        )
+        admin_defaults = AdminWizard.default_get(list(AdminWizard._fields))
+        self.assertEqual(admin_defaults["sqlite_path"], path)
+        admin_defaults["sqlite_path"] = other_path
+        AdminWizard.create(admin_defaults).action_save()
+        self.assertEqual(connector.sqlite_path, other_path)
 
     def test_non_sqlite_file_is_neither_returned_nor_opened(self):
         """A file without the SQLite header MUST not be read back or opened."""
