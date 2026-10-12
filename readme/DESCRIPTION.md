@@ -18,12 +18,14 @@ and
 `invoices(id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, number TEXT NOT NULL UNIQUE, issue_date TEXT NOT NULL, due_date TEXT NOT NULL, amount REAL NOT NULL, balance REAL NOT NULL, state TEXT NOT NULL, document_kind TEXT NOT NULL DEFAULT invoice CHECK invoice|quotation)`.
 Missing, unreadable, non-SQLite, or invalid schema raises `UserError` without path or
 SQL, and a non-SQLite file is never offered for download. Success does not write the
-file. Depends on `collection`. Admins can run Test Connection on the connector form.
-Customer listing and customer debt are seller-scoped and stay in this addon;
-`collection` does not import or open SQLite.
+file. Depends on `collection`. Administrators and Collections Managers of the company
+can run Test Connection on the connector form. Customer listing and customer debt are
+seller-scoped and stay in this addon; `collection` does not import or open SQLite.
 
 Install and upgrade materialize `data/database.sql` as `database.sqlite` under Odoo
 `data_dir`, create the **SQLite Sellers** connector, assign it on the main company when
 none is set, and expose the file for download to administrators on the connector form.
 Customer debt reads outstanding `open`/`overdue` invoices and quotations
-(`document_kind`) with positive balance. Test Connection remains sellers-only.
+(`document_kind`) with positive balance. Negative balances of `open`/`overdue` rows are
+the customer's open credit and are reported as `credit_total`, like the Bejerman
+connector, so the `collection` summary nets them. Test Connection remains sellers-only.
