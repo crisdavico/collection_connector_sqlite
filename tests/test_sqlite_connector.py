@@ -621,18 +621,23 @@ class TestSqliteConnector(TransactionCase):
         company_field = self.env["res.company"]._fields["collection_connector_id"]
         self.assertEqual(company_field.ondelete, "set null")
 
-    def test_import_from_sample_connector_creates_five_users_and_replaces_list(self):
-        """Sample SQLite Import MUST enable the five active sellers."""
+    def test_import_from_sample_connector_creates_five_users_and_keeps_extras(self):
+        """Sample SQLite Import MUST enable the five active sellers.
+
+        Import no longer replaces the list (collection T28): a seller missing
+        from the answer stays enabled and is reported for a manager to disable.
+        """
         extra = create_internal_seller(self.env, "sqlite_import_extra")
         ensure_enabled_seller(self.env, extra)
         connector = self.env.ref("collection_connector_sqlite.connector_sample_sellers")
         company = self.env.company
         company.collection_connector_id = connector
         self.assertIn(extra, company.enabled_seller_ids)
-        company._sync_enabled_sellers_from_connector()
+        result = company._sync_enabled_sellers_from_connector()
         enabled = company.enabled_seller_ids
-        self.assertEqual(len(enabled), 5)
-        self.assertNotIn(extra, enabled)
+        self.assertEqual(len(result["imported"]), 5)
+        self.assertEqual(enabled, result["imported"] | extra)
+        self.assertEqual(result["missing"], extra)
         self.assertEqual(
             set(connector.seller_binding_ids.mapped("external_seller_id")),
             {
@@ -993,6 +998,28 @@ class TestSqliteConnector(TransactionCase):
         self.assertEqual(empty["invoices"], [])
         self.assertEqual(empty["summary"]["open_balance"], 0.0)
         self.assertEqual(empty["summary"]["overdue_balance"], 0.0)
+
+    def test_sqlite_open_credit_notes_net_the_customer_total(self):
+        """Decision D4: negative open balances are credits; invoices stay gross."""
+        path = self._write_debt_db(
+            (("s1", "Ana", "549111", 1, 0.0),),
+            (("c1", "s1", "Credit One", "20-1", "C-1", 1),),
+            (
+                ("i1", "c1", "A-1", "2026-01-01", "2026-09-01", 1000.0, 1000.0, "open"),
+                ("n1", "c1", "NC-1", "2026-02-01", "2026-09-01", 300.0, -300.0, "open"),
+                ("n2", "c1", "NC-2", "2026-02-01", "2026-09-01", 50.0, -50.0, "paid"),
+            ),
+        )
+        connector = self._make_sqlite_connector(path, name="SQLite credits")
+        seller = self._enabled_bound_seller(connector, "s1", "sqlite_credit_s1")
+        result = connector.get_customer_debt(seller.id, "20-1")
+        self.assertEqual(
+            [row["external_invoice_id"] for row in result["invoices"]], ["i1"]
+        )
+        self.assertEqual(result["summary"]["gross_total"], 1000.0)
+        self.assertEqual(result["summary"]["credit_total"], 300.0)
+        self.assertEqual(result["summary"]["net_total"], 700.0)
+        self.assertEqual(result["summary"]["total_balance"], 700.0)
 
     def test_sqlite_get_customer_debt_rejects_inactive_and_other_seller(self):
         """Inactive and other-seller identifications MUST fail closed."""
