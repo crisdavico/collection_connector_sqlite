@@ -92,6 +92,5 @@ repos:
           - --gen-html
           - --if-fragments-changed
           - --branch=19.0
-          # The README template is the seedian parent's (this repo is checked out at
-          # odoo/custom/src/crisdavico/<addon> inside it)
-          - --template-filename=../../../../../.module-readme.rst.j2
+          # A copy of the seedian parent's template, so the hook runs standalone
+          - --template-filename=.module-readme.rst.j2
