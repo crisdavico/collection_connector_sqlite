@@ -621,18 +621,23 @@ class TestSqliteConnector(TransactionCase):
         company_field = self.env["res.company"]._fields["collection_connector_id"]
         self.assertEqual(company_field.ondelete, "set null")
 
-    def test_import_from_sample_connector_creates_five_users_and_replaces_list(self):
-        """Sample SQLite Import MUST enable the five active sellers."""
+    def test_import_from_sample_connector_creates_five_users_and_keeps_extras(self):
+        """Sample SQLite Import MUST enable the five active sellers.
+
+        Import no longer replaces the list (collection T28): a seller missing
+        from the answer stays enabled and is reported for a manager to disable.
+        """
         extra = create_internal_seller(self.env, "sqlite_import_extra")
         ensure_enabled_seller(self.env, extra)
         connector = self.env.ref("collection_connector_sqlite.connector_sample_sellers")
         company = self.env.company
         company.collection_connector_id = connector
         self.assertIn(extra, company.enabled_seller_ids)
-        company._sync_enabled_sellers_from_connector()
+        result = company._sync_enabled_sellers_from_connector()
         enabled = company.enabled_seller_ids
-        self.assertEqual(len(enabled), 5)
-        self.assertNotIn(extra, enabled)
+        self.assertEqual(len(result["imported"]), 5)
+        self.assertEqual(enabled, result["imported"] | extra)
+        self.assertEqual(result["missing"], extra)
         self.assertEqual(
             set(connector.seller_binding_ids.mapped("external_seller_id")),
             {
