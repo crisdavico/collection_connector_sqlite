@@ -10,11 +10,13 @@ import stat
 import tempfile
 from unittest.mock import patch
 
-from odoo.exceptions import UserError
+from odoo import Command
+from odoo.exceptions import AccessError, UserError
 from odoo.modules.module import load_manifest
 from odoo.tests import TransactionCase
 
 from odoo.addons.collection.tests.test_collection_payment import (
+    create_collection_user,
     create_internal_seller,
     dummy_customer_partner,
     ensure_enabled_seller,
@@ -1213,3 +1215,129 @@ class TestSqliteConnector(TransactionCase):
         self.assertEqual(kinds["quo-001"], "quotation")
         self.assertAlmostEqual(result["summary"]["total_balance"], 1674316.48)
         self.assertEqual(result["summary"]["invoice_count"], 3)
+
+    def _make_collection_manager(self, login):
+        user = create_internal_seller(self.env, login)
+        manager_group = self.env.ref("collection.group_collection_manager")
+        user.write({"group_ids": [Command.link(manager_group.id)]})
+        return user
+
+    def test_sqlite_path_and_file_fields_are_system_only(self):
+        """Only system admins MUST read or write the SQLite path and file fields."""
+        path = self._write_sellers_db((("s1", "Ana", "549111", 1, 0.0),))
+        other_path = self._write_sellers_db((("s2", "Beto", "549112", 1, 0.0),))
+        connector = self._make_sqlite_connector(path, name="SQLite field groups")
+        internal = create_internal_seller(self.env, "sqlite_fields_internal")
+        manager = self._make_collection_manager("sqlite_fields_manager")
+        for user in (internal, manager):
+            for field_name in ("sqlite_path", "sqlite_filename", "sqlite_file"):
+                with self.subTest(user=user.login, field=field_name):
+                    with self.assertRaises(AccessError):
+                        connector.with_user(user).read([field_name])
+        with self.assertRaises(AccessError):
+            connector.with_user(manager).write({"sqlite_path": other_path})
+        with self.assertRaises(AccessError):
+            self.env["collection.connector"].with_user(manager).create(
+                {
+                    "name": "SQLite manager",
+                    "type": "sqlite",
+                    "sqlite_path": other_path,
+                }
+            )
+        self.assertEqual(connector.sqlite_path, path)
+        as_admin = connector.with_user(self.env.ref("base.user_admin"))
+        values = as_admin.read(["sqlite_path", "sqlite_filename", "sqlite_file"])[0]
+        self.assertEqual(values["sqlite_path"], path)
+        self.assertEqual(values["sqlite_filename"], "sellers.sqlite")
+        self.assertTrue(values["sqlite_file"])
+        as_admin.write({"sqlite_path": other_path})
+        self.assertEqual(connector.sqlite_path, other_path)
+
+    def test_non_admin_operations_still_reach_the_restricted_path(self):
+        """MCP callers and managers MUST still query the source without its path.
+
+        Sellers act only through the agent: the MCP API user (a Collections
+        User) queries on the seller's behalf, and the seller identity itself
+        has no access to the connector.
+        """
+        path = self._write_source_db(
+            (("s1", "Ana", "549111", 1, 0.0),),
+            (("c1", "s1", "Active One", "20-1", "C-1", 1),),
+        )
+        connector = self._make_sqlite_connector(path, name="SQLite non-admin")
+        seller = self._enabled_bound_seller(connector, "s1", "sqlite_nonadmin_seller")
+        mcp_user = create_collection_user(self.env, "sqlite_nonadmin_mcp")
+        manager = self._make_collection_manager("sqlite_nonadmin_manager")
+        customers = connector.with_user(mcp_user).list_customers(seller.id)
+        self.assertEqual(
+            [row["external_customer_id"] for row in customers["customers"]],
+            ["c1"],
+        )
+        sellers = connector.with_user(manager).list_sellers()
+        self.assertEqual(
+            [row["external_seller_id"] for row in sellers["sellers"]],
+            ["s1"],
+        )
+        with self.assertRaises(AccessError):
+            connector.with_user(seller).list_customers(seller.id)
+
+    def test_settings_wizard_keeps_the_path_admin_only(self):
+        """A manager's connector settings never show or change the SQLite path."""
+        path = self._write_sellers_db((("s1", "Ana", "549111", 1, 0.0),))
+        other_path = self._write_sellers_db((("s2", "Beto", "549112", 1, 0.0),))
+        connector = self._make_sqlite_connector(path, name="SQLite wizard")
+        manager = self._make_collection_manager("sqlite_wizard_manager")
+        Wizard = (
+            self.env["collection.connector.settings"]
+            .with_user(manager)
+            .with_context(default_connector_id=connector.id)
+        )
+        defaults = Wizard.default_get(list(Wizard._fields))
+        self.assertNotIn("sqlite_path", defaults)
+        with self.assertRaises(AccessError):
+            Wizard.create({"connector_id": connector.id, "sqlite_path": other_path})
+        Wizard.create(defaults).action_save()
+        self.assertEqual(connector.sqlite_path, path)
+        admin = self.env.ref("base.user_admin")
+        AdminWizard = (
+            self.env["collection.connector.settings"]
+            .with_user(admin)
+            .with_context(default_connector_id=connector.id)
+        )
+        admin_defaults = AdminWizard.default_get(list(AdminWizard._fields))
+        self.assertEqual(admin_defaults["sqlite_path"], path)
+        admin_defaults["sqlite_path"] = other_path
+        AdminWizard.create(admin_defaults).action_save()
+        self.assertEqual(connector.sqlite_path, other_path)
+
+    def test_non_sqlite_file_is_neither_returned_nor_opened(self):
+        """A file without the SQLite header MUST not be read back or opened."""
+        folder = tempfile.mkdtemp(prefix="col_sqlite_")
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        admin = self.env.ref("base.user_admin")
+        payloads = {
+            "secrets.sqlite": b"DB_PASSWORD=hunter2\nadmin_passwd=secret\n",
+            "near-miss.sqlite": b"SQLite format 3 but byte 16 is not NUL",
+            "short.sqlite": b"SQLite",
+            "empty.sqlite": b"",
+        }
+        for filename, payload in payloads.items():
+            path = os.path.join(folder, filename)
+            with open(path, "wb") as handle:
+                handle.write(payload)
+            connector = self._make_sqlite_connector(path, name=f"SQLite {filename}")
+            with self.subTest(filename=filename):
+                values = connector.with_user(admin).read(
+                    ["sqlite_file", "sqlite_filename"]
+                )[0]
+                self.assertFalse(values["sqlite_file"])
+                self.assertFalse(values["sqlite_filename"])
+                self._assert_not_connected(connector.list_sellers, path)
+                self._assert_not_connected(connector.test_connection, path)
+                self._assert_not_connected(
+                    lambda rec=connector: rec._sqlite_list_customers("s1"), path
+                )
+                self._assert_not_connected(
+                    lambda rec=connector: rec._sqlite_get_customer_debt("s1", "20-1"),
+                    path,
+                )
