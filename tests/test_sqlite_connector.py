@@ -994,6 +994,28 @@ class TestSqliteConnector(TransactionCase):
         self.assertEqual(empty["summary"]["open_balance"], 0.0)
         self.assertEqual(empty["summary"]["overdue_balance"], 0.0)
 
+    def test_sqlite_open_credit_notes_net_the_customer_total(self):
+        """Decision D4: negative open balances are credits; invoices stay gross."""
+        path = self._write_debt_db(
+            (("s1", "Ana", "549111", 1, 0.0),),
+            (("c1", "s1", "Credit One", "20-1", "C-1", 1),),
+            (
+                ("i1", "c1", "A-1", "2026-01-01", "2026-09-01", 1000.0, 1000.0, "open"),
+                ("n1", "c1", "NC-1", "2026-02-01", "2026-09-01", 300.0, -300.0, "open"),
+                ("n2", "c1", "NC-2", "2026-02-01", "2026-09-01", 50.0, -50.0, "paid"),
+            ),
+        )
+        connector = self._make_sqlite_connector(path, name="SQLite credits")
+        seller = self._enabled_bound_seller(connector, "s1", "sqlite_credit_s1")
+        result = connector.get_customer_debt(seller.id, "20-1")
+        self.assertEqual(
+            [row["external_invoice_id"] for row in result["invoices"]], ["i1"]
+        )
+        self.assertEqual(result["summary"]["gross_total"], 1000.0)
+        self.assertEqual(result["summary"]["credit_total"], 300.0)
+        self.assertEqual(result["summary"]["net_total"], 700.0)
+        self.assertEqual(result["summary"]["total_balance"], 700.0)
+
     def test_sqlite_get_customer_debt_rejects_inactive_and_other_seller(self):
         """Inactive and other-seller identifications MUST fail closed."""
         path = self._write_debt_db(

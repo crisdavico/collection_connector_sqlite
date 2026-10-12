@@ -33,6 +33,19 @@ _SQLITE_INVOICE_COLUMNS = frozenset(
     }
 )
 _SQLITE_DOCUMENT_KINDS = frozenset({"invoice", "quotation"})
+_SQLITE_OPEN_STATES = frozenset({"open", "overdue"})
+
+
+def sqlite_credit_total(invoice_rows):
+    """Open credit (negative open balances) as a positive amount (decision D4)."""
+    return round(
+        sum(
+            -float(row[5])
+            for row in invoice_rows
+            if float(row[5]) < 0 and row[6] in _SQLITE_OPEN_STATES
+        ),
+        2,
+    )
 
 
 def sqlite_path_is_rejected(path):
@@ -266,6 +279,7 @@ class CollectionConnectorSqlite(models.Model):
                 }
                 for row in invoice_rows
             ],
+            "credit_total": sqlite_credit_total(invoice_rows),
         }
 
     @api.private
