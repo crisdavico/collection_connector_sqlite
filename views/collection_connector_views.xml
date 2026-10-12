@@ -8,29 +8,29 @@
             <xpath expr="//sheet" position="before">
                 <header>
                     <button
-                        name="test_connection"
-                        type="object"
-                        string="Test Connection"
-                        class="btn-primary"
-                        invisible="type != 'sqlite'"
-                        groups="base.group_system"
-                    />
+            name="test_connection"
+            type="object"
+            string="Test Connection"
+            class="btn-primary"
+            invisible="type != 'sqlite'"
+            groups="base.group_system"
+          />
                 </header>
             </xpath>
             <xpath expr="//field[@name='type']" position="after">
                 <field
-                    name="sqlite_path"
-                    invisible="type != 'sqlite'"
-                    required="type == 'sqlite'"
-                />
+          name="sqlite_path"
+          invisible="type != 'sqlite'"
+          required="type == 'sqlite'"
+        />
                 <field name="sqlite_filename" invisible="1" />
                 <field
-                    name="sqlite_file"
-                    filename="sqlite_filename"
-                    readonly="1"
-                    invisible="type != 'sqlite'"
-                    groups="base.group_system"
-                />
+          name="sqlite_file"
+          filename="sqlite_filename"
+          readonly="1"
+          invisible="type != 'sqlite'"
+          groups="base.group_system"
+        />
             </xpath>
         </field>
     </record>
