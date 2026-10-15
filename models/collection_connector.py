@@ -9,6 +9,8 @@ from odoo import api, fields, models
 from odoo.exceptions import UserError
 from odoo.tools.translate import _
 
+from odoo.addons.collection.customer_match import matches_customer_query
+
 from ..hooks import ensure_sample_sqlite_source
 
 _SQLITE_PATH_REJECT_CHARS = ("?", "#", "\x00")
@@ -232,12 +234,17 @@ class CollectionConnectorSqlite(models.Model):
                     """
                     SELECT id, name, identification, customer_code, active
                       FROM customers
-                     WHERE seller_id = ? AND identification = ?
+                     WHERE seller_id = ?
                     """,
-                    (external_seller_id, identification),
+                    (external_seller_id,),
                 ).fetchall()
             except sqlite3.Error:
                 self._sqlite_misconfigured()
+            customer_rows = [
+                row
+                for row in customer_rows
+                if matches_customer_query(row[2], row[3], identification)
+            ]
             if len(customer_rows) != 1:
                 return {"customer": None, "invoices": []}
             customer_row = customer_rows[0]

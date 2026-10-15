@@ -1021,6 +1021,49 @@ class TestSqliteConnector(TransactionCase):
         self.assertEqual(result["summary"]["net_total"], 700.0)
         self.assertEqual(result["summary"]["total_balance"], 700.0)
 
+    def test_sqlite_get_customer_debt_matches_code_and_unique_number(self):
+        """Code and a unique numeric tail resolve the same customer as the CUIT."""
+        path = self._write_debt_db(
+            (("s1", "Ana", "549111", 1, 0.0), ("s2", "Beto", "549112", 1, 0.0)),
+            (
+                ("c1", "s1", "Norte", "30-76543210-9", "NS0160", 1),
+                ("c2", "s2", "Foreign", "20-3", "NS0160", 1),
+            ),
+            (("i1", "c1", "A-1", "2026-01-01", "2026-09-01", 80.0, 80.0, "open"),),
+        )
+        connector = self._make_sqlite_connector(path, name="SQLite code match")
+        seller = self._enabled_bound_seller(connector, "s1", "sqlite_code_s1")
+        for identification in ("NS0160", "ns0160", "0160", "160", "30-76543210-9"):
+            with self.subTest(identification=identification):
+                result = connector.get_customer_debt(seller.id, identification)
+                self.assertEqual(result["customer"]["customer_code"], "NS0160")
+                self.assertEqual(result["invoices"][0]["balance"], 80.0)
+        self._assert_user_error_no_leak(
+            lambda: connector.get_customer_debt(seller.id, "20-3"),
+            path,
+        )
+
+        ambiguous_path = self._write_debt_db(
+            (("s1", "Ana", "549111", 1, 0.0),),
+            (
+                ("c1", "s1", "Norte", "30-76543210-9", "NS0160", 1),
+                ("c2", "s1", "Ambiguous", "30-11122233-9", "AB0160", 1),
+            ),
+            (),
+        )
+        ambiguous = self._make_sqlite_connector(
+            ambiguous_path, name="SQLite ambiguous code"
+        )
+        ambiguous_seller = self._enabled_bound_seller(
+            ambiguous, "s1", "sqlite_code_ambiguous"
+        )
+        self._assert_user_error_no_leak(
+            lambda: ambiguous.get_customer_debt(ambiguous_seller.id, "0160"),
+            ambiguous_path,
+        )
+        exact = ambiguous.get_customer_debt(ambiguous_seller.id, "NS0160")
+        self.assertEqual(exact["customer"]["customer_code"], "NS0160")
+
     def test_sqlite_get_customer_debt_rejects_inactive_and_other_seller(self):
         """Inactive and other-seller identifications MUST fail closed."""
         path = self._write_debt_db(
