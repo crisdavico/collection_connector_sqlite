@@ -313,7 +313,8 @@ class TestSqliteConnector(TransactionCase):
         arch = view.arch
         self.assertIn("sqlite_path", arch)
         self.assertIn("sqlite_file", arch)
-        self.assertIn("test_connection", arch)
+        combined = self.env["collection.connector"].get_view(view_type="form")["arch"]
+        self.assertEqual(combined.count('name="test_connection"'), 1)
 
     def test_install_materializes_sqlite_connector_for_ui(self):
         """Install seeds sqlite file, xmlid connector, download, and company M2O."""
@@ -1351,34 +1352,21 @@ class TestSqliteConnector(TransactionCase):
         with self.assertRaises(AccessError):
             connector.with_user(seller).list_customers(seller.id)
 
-    def test_settings_wizard_keeps_the_path_admin_only(self):
-        """A manager's connector settings never show or change the SQLite path."""
+    def test_connector_form_keeps_the_path_admin_only(self):
+        """The shared form keeps server paths and file downloads admin-only."""
         path = self._write_sellers_db((("s1", "Ana", "549111", 1, 0.0),))
-        other_path = self._write_sellers_db((("s2", "Beto", "549112", 1, 0.0),))
-        connector = self._make_sqlite_connector(path, name="SQLite wizard")
-        manager = self._make_collection_manager("sqlite_wizard_manager")
-        Wizard = (
-            self.env["collection.connector.settings"]
-            .with_user(manager)
-            .with_context(default_connector_id=connector.id)
-        )
-        defaults = Wizard.default_get(list(Wizard._fields))
-        self.assertNotIn("sqlite_path", defaults)
-        with self.assertRaises(AccessError):
-            Wizard.create({"connector_id": connector.id, "sqlite_path": other_path})
-        Wizard.create(defaults).action_save()
+        connector = self._make_sqlite_connector(path, name="SQLite settings")
+        manager = self._make_collection_manager("sqlite_settings_manager")
+        managed = connector.with_user(manager)
+        action = managed.action_collection_connector_settings()
+        self.assertEqual(action["res_model"], "collection.connector")
+        self.assertEqual(action["res_id"], connector.id)
+        arch = managed.get_view(view_type="form")["arch"]
+        for name in ("sqlite_path", "sqlite_filename", "sqlite_file"):
+            self.assertNotIn(f'name="{name}"', arch)
+        self.assertEqual(arch.count('name="test_connection"'), 1)
+        managed.test_connection()
         self.assertEqual(connector.sqlite_path, path)
-        admin = self.env.ref("base.user_admin")
-        AdminWizard = (
-            self.env["collection.connector.settings"]
-            .with_user(admin)
-            .with_context(default_connector_id=connector.id)
-        )
-        admin_defaults = AdminWizard.default_get(list(AdminWizard._fields))
-        self.assertEqual(admin_defaults["sqlite_path"], path)
-        admin_defaults["sqlite_path"] = other_path
-        AdminWizard.create(admin_defaults).action_save()
-        self.assertEqual(connector.sqlite_path, other_path)
 
     def test_non_sqlite_file_is_neither_returned_nor_opened(self):
         """A file without the SQLite header MUST not be read back or opened."""

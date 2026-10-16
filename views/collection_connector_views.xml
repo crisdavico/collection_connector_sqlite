@@ -5,18 +5,6 @@
         <field name="model">collection.connector</field>
         <field name="inherit_id" ref="collection.view_collection_connector_form" />
         <field name="arch" type="xml">
-            <xpath expr="//sheet" position="before">
-                <header>
-                    <button
-            name="test_connection"
-            type="object"
-            string="Test Connection"
-            class="btn-primary"
-            invisible="type != 'sqlite'"
-            groups="base.group_system"
-          />
-                </header>
-            </xpath>
             <xpath expr="//field[@name='type']" position="after">
                 <field
           name="sqlite_path"
